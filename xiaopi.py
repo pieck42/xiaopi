@@ -6,6 +6,7 @@ import math
 import sys
 import time
 import tkinter as tk
+from tkinter import font as tkfont
 from PIL import ImageTk
 from animation import SpriteAtlas, ACTION_NAMES, MANIFEST, frame_index
 
@@ -31,8 +32,8 @@ class Xiaopi:
         self.skin = self.config.get('skin', 'dragon')
         if self.skin not in ('fox', 'dragon'):
             self.skin = 'dragon'
-        self.size = int(self.config.get('size', 280))
-        self.size = max(180, min(420, self.size))
+        self.size = int(self.config.get('size', 380))
+        self.size = max(180, min(800, self.size))
         self.state = 'idle'
         self.topmost = bool(self.config.get('topmost', True))
         self.root = tk.Tk()
@@ -47,37 +48,66 @@ class Xiaopi:
         self.atlases = {name: SpriteAtlas(name) for name in ('fox', 'dragon')}
         self.frames = {}
         self.demo_jobs = []
+        self.chat = None
         self.drag = None
+        self.settings_window = None
         self.started = time.monotonic()
         self.root.bind('<ButtonPress-1>', self.press)
         self.root.bind('<B1-Motion>', self.move)
         self.root.bind('<ButtonRelease-1>', self.release)
         self.root.bind('<Button-3>', self.popup)
-        self.root.bind('<Double-Button-1>', lambda e: self.switch())
+        self.root.bind('<Double-Button-1>', self.double_click)
+        self.root.bind('<Motion>', self.pointer_cursor)
         self.root.bind('<Escape>', lambda e: self.set_state('idle'))
         self.root.bind('<Control-q>', lambda e: self.close())
+        self.root.bind('<Control-Return>', lambda e: self.open_chat())
         for index, state in enumerate(STATES, 1):
             self.root.bind(str(index), lambda e, s=state: self.set_state(s))
         self.layout()
         screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        x = max(0, min(screen_w - self.size - 60, int(self.config.get('x', screen_w-self.size-90))))
-        y = max(0, min(screen_h - self.size - 170, int(self.config.get('y', screen_h-self.size-210))))
+        x = max(0, min(screen_w - self.width, int(self.config.get('x', screen_w-self.width-30))))
+        y = max(0, min(screen_h - self.height - 45, int(self.config.get('y', screen_h-self.height-70))))
         self.root.geometry(f'+{x}+{y}')
         self.animate()
 
     def layout(self):
-        self.width, self.height = self.size + 60, self.size + 140
-        self.root.geometry(f'{self.width}x{self.height}')
         self.canvas.delete('all')
-        self.canvas.create_rectangle(5, 5, self.width-5, 72, fill='#15252e', outline='#43615f', width=2)
-        self.caption = self.canvas.create_text(self.width/2, 38, text=STATES[self.state],
-            fill='#e2f5e8', width=self.width-28, font=('Microsoft YaHei', max(12, self.size//21)), justify='center')
-        self.sprite = self.canvas.create_image(self.width/2, 82+self.size/2)
-        self.action_caption = self.canvas.create_text(self.width/2, self.height-40, text=ACTION_NAMES[self.state],
-            fill='#b4f1cf', font=('Microsoft YaHei', 12))
-        self.canvas.create_text(self.width/2, self.height-16, text='右键菜单  /  双击换装  /  1–5 切动作',
-            fill='#bfd5d0', font=('Microsoft YaHei', 10))
+        self.caption_font = tkfont.Font(root=self.root, family='Microsoft YaHei', size=max(12, self.size//21))
+        self.width = self.size+60
+        self.caption = self.canvas.create_text(self.width/2, 20, anchor='n',
+            fill='#e2f5e8', width=self.width-40, font=self.caption_font, justify='center')
+        # Measure actual canvas text, including wrapping and the current Windows DPI.
+        caption_text = getattr(self, 'caption_text', STATES[self.state])
+        max_bottom = 0
+        for text in (*STATES.values(), caption_text):
+            self.canvas.itemconfigure(self.caption, text=text)
+            max_bottom = max(max_bottom, self.canvas.bbox(self.caption)[3])
+        self.canvas.itemconfigure(self.caption, text=caption_text)
+        self.bubble_box = (5, 5, self.width-5, max_bottom+16)
+        self.bubble = self.canvas.create_rectangle(*self.bubble_box,
+            fill='#15252e', outline='#43615f', width=2)
+        self.canvas.tag_lower(self.bubble)
+        self.sprite_center_y = self.bubble_box[3]+24+self.size/2
+        self.sprite = self.canvas.create_image(self.width/2, self.sprite_center_y)
+        self.height = int(self.sprite_center_y+self.size/2+78)
+        self.chat_button_box = (18, self.height-57, self.width-18, self.height-9)
+        self.canvas.create_rectangle(*self.chat_button_box, fill='#b4f1cf', outline='#d5ffe6', width=2)
+        self.canvas.create_text((self.chat_button_box[0]+self.chat_button_box[2])/2, self.height-33,
+            text='和小皮聊天  ›', fill='#15252e', font=('Microsoft YaHei', max(12, self.size//25), 'bold'))
+        self.root.geometry(f'{self.width}x{self.height}')
         self.frames.clear()
+
+    def clamp_position(self):
+        self.root.update_idletasks()
+        x = max(0, min(self.root.winfo_x(), self.root.winfo_screenwidth()-self.width))
+        y = max(0, min(self.root.winfo_y(), self.root.winfo_screenheight()-self.height-45))
+        self.root.geometry(f'+{x}+{y}')
+
+    def set_caption(self, text):
+        self.caption_text = text
+        self.layout()
+        self.draw_sprite(0)
+        self.clamp_position()
 
     def animate(self):
         t = time.monotonic()-self.started
@@ -85,7 +115,7 @@ class Xiaopi:
         dy = -2*math.sin(t*math.tau/3) if self.state == 'idle' else 0
         if self.state == 'happy':
             dy = -14*abs(math.sin(t*math.pi/.6))
-        self.canvas.coords(self.sprite, self.width/2, 87+self.size/2+dy)
+        self.canvas.coords(self.sprite, self.width/2, self.sprite_center_y+dy)
         self.root.after(60, self.animate)
 
     def draw_sprite(self, index):
@@ -112,9 +142,7 @@ class Xiaopi:
             self.cancel_demo()
         self.state = name
         self.started = time.monotonic()
-        self.canvas.itemconfigure(self.caption, text=STATES[name])
-        self.canvas.itemconfigure(self.action_caption, text=ACTION_NAMES[name])
-        self.draw_sprite(0)
+        self.set_caption(STATES[name])
 
     def cancel_demo(self):
         for job in self.demo_jobs:
@@ -127,13 +155,63 @@ class Xiaopi:
         for ms, state in ((3300,'listening'), (6100,'thinking'), (9100,'speaking'), (11900,'happy'), (14900,'idle')):
             self.demo_jobs.append(self.root.after(ms, lambda s=state: self.set_state(s, cancel=False)))
 
-    def resize(self, size):
-        self.size = size
+    def resize(self, size, persist=True):
+        self.size = max(180, min(800, int(size)))
         self.layout()
-        self.root.update_idletasks()
-        self.root.geometry(f'+{max(0, min(self.root.winfo_x(), self.root.winfo_screenwidth()-self.width))}'
-                           f'+{max(0, min(self.root.winfo_y(), self.root.winfo_screenheight()-self.height-45))}')
-        self.save()
+        self.draw_sprite(0)
+        self.clamp_position()
+        if persist:
+            self.save()
+
+    def pointer_cursor(self, event):
+        self.canvas.configure(cursor='hand2' if self.over_chat_button(event) else '')
+
+    def over_chat_button(self, event):
+        left, top, right, bottom = self.chat_button_box
+        return left <= event.x <= right and top <= event.y <= bottom
+
+    def double_click(self, event):
+        if not self.over_chat_button(event):
+            self.switch()
+
+    def open_settings(self):
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            return
+        window = self.settings_window = tk.Toplevel(self.root)
+        window.title('小皮设置')
+        window.resizable(False, False)
+        window.attributes('-topmost', self.topmost)
+        frame = tk.Frame(window, padx=24, pady=20)
+        frame.pack()
+        tk.Label(frame, text='形象大小', font=('Microsoft YaHei', 13)).pack(anchor='w')
+        self.settings_size = tk.IntVar(value=self.size)
+        self.settings_value = tk.StringVar(value=f'{round(self.size/380*100)}%')
+        tk.Label(frame, textvariable=self.settings_value, font=('Microsoft YaHei', 11)).pack(anchor='e')
+        self.size_slider = tk.Scale(frame, from_=180, to=800, orient='horizontal',
+            length=320, resolution=1, showvalue=False, variable=self.settings_size,
+            command=self.update_size_setting)
+        self.size_slider.pack(fill='x', pady=(0, 16))
+        tk.Button(frame, text='完成', command=self.close_settings,
+            font=('Microsoft YaHei', 11), padx=18).pack(anchor='e')
+        window.protocol('WM_DELETE_WINDOW', self.close_settings)
+        window.update_idletasks()
+        x = max(0, min(self.root.winfo_x(), window.winfo_screenwidth()-window.winfo_width()))
+        y = max(0, min(self.root.winfo_y(), window.winfo_screenheight()-window.winfo_height()-45))
+        window.geometry(f'+{x}+{y}')
+        window.lift()
+
+    def update_size_setting(self, value):
+        size = int(float(value))
+        if size != self.size:
+            self.resize(size, persist=False)
+        self.settings_value.set(f'{round(self.size/380*100)}%')
+
+    def close_settings(self):
+        if self.settings_window is not None:
+            self.save()
+            self.settings_window.destroy()
+            self.settings_window = None
 
     def toggle_topmost(self):
         self.topmost = not self.topmost
@@ -142,7 +220,7 @@ class Xiaopi:
 
     def popup(self, event):
         menu = tk.Menu(self.root, tearoff=False, font=('Microsoft YaHei', 12))
-        menu.add_command(label='小皮 · 本地模拟原型', state='disabled')
+        menu.add_command(label='和小皮聊天…', command=self.open_chat)
         menu.add_separator()
         for key, label in (('fox','小狐狸'), ('dragon','小龙')):
             menu.add_command(label=('✓ ' if self.skin == key else '   ')+label, command=lambda k=key:self.switch(k))
@@ -150,10 +228,7 @@ class Xiaopi:
         for key, label in (('idle','待机'),('listening','倾听'),('thinking','思考'),('speaking','回答'),('happy','开心')):
             menu.add_command(label=ACTION_NAMES[key]+'（模拟）', command=lambda k=key:self.set_state(k))
         menu.add_command(label='播放完整互动演示', command=self.demo)
-        sizes = tk.Menu(menu, tearoff=False)
-        for size, label in ((200,'小'),(280,'中'),(380,'大 · 客厅')):
-            sizes.add_command(label=label, command=lambda s=size:self.resize(s))
-        menu.add_cascade(label='形象大小', menu=sizes)
+        menu.add_command(label='设置…', command=self.open_settings)
         menu.add_command(label=('✓ ' if self.topmost else '')+'保持在最上层', command=self.toggle_topmost)
         menu.add_separator()
         menu.add_command(label='退出小皮', command=self.close)
@@ -163,6 +238,10 @@ class Xiaopi:
             menu.grab_release()
 
     def press(self, event):
+        if self.over_chat_button(event):
+            self.drag = None
+            self.open_chat()
+            return
         self.drag = (event.x_root, event.y_root, self.root.winfo_x(), self.root.winfo_y())
         self.moved = False
 
@@ -185,8 +264,17 @@ class Xiaopi:
         self.drag = None
 
     def close(self):
+        self.close_settings()
+        if self.chat:
+            self.chat.close()
         self.save()
         self.root.destroy()
+
+    def open_chat(self):
+        if self.chat is None:
+            from chat import ChatWindow
+            self.chat = ChatWindow(self)
+        self.chat.show()
 
 
 if __name__ == '__main__':
@@ -241,4 +329,6 @@ if __name__ == '__main__':
         app.root.after(500, check)
     elif '--demo' in sys.argv:
         app.root.after(800, app.demo)
+    elif '--chat' in sys.argv:
+        app.root.after(300, app.open_chat)
     app.root.mainloop()

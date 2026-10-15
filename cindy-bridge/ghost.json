@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 3,
+  "minCindyVersion": "0.1.108",
+  "id": "xiaopi-bridge",
+  "name": "小皮连接",
+  "description": "将本机小皮桌面宠物的文字消息发送到固定的专属 Cindy 对话，并读取真实回复。",
+  "whenToUse": "将本机小皮桌面宠物的文字消息发送到固定的专属 Cindy 对话，并读取真实回复。",
+  "version": "0.1.0",
+  "kind": "chip",
+  "entry": "main.js",
+  "icon": "assets/icon.png",
+  "tools": [
+    {
+      "name": "bridge_status",
+      "description": "检查本机小皮文字连接服务是否启动，不创建会话、不发送消息。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  ],
+  "node": {
+    "entry": "node/worker.cjs",
+    "protocol": "json-rpc-stdio",
+    "lifecycle": "resident"
+  },
+  "launch": "resident",
+  "command": "xiaopi-bridge",
+  "agent": {
+    "tasks": true
+  }
+}
